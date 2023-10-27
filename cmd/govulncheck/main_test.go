@@ -24,9 +24,9 @@ import (
 	"unsafe"
 
 	"github.com/google/go-cmdtest"
-	"golang.org/x/vuln/internal/govulncheck"
-	"golang.org/x/vuln/internal/test"
-	"golang.org/x/vuln/internal/web"
+	"golang.org/x/vuln/pkg/govulncheck"
+	"golang.org/x/vuln/pkg/test"
+	"golang.org/x/vuln/pkg/web"
 	"golang.org/x/vuln/scan"
 )
 

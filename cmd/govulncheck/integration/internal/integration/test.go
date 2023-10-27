@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"github.com/google/go-cmp/cmp"
-	"golang.org/x/vuln/internal/govulncheck"
+	"golang.org/x/vuln/pkg/govulncheck"
 )
 
 // CompareNonStdVulns compares vulnerable packages in out and want.
