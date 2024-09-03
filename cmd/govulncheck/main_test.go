@@ -2,12 +2,6 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Only run this on Go 1.18 or higher, because govulncheck can't
-// run on binaries before 1.18.
-
-//go:build go1.18
-// +build go1.18
-
 package main
 
 import (
@@ -17,13 +11,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"sync"
 	"testing"
 	"unsafe"
 
 	"github.com/google/go-cmdtest"
+	"github.com/google/go-cmp/cmp"
 	"golang.org/x/vuln/internal/govulncheck"
 	"golang.org/x/vuln/internal/test"
 	"golang.org/x/vuln/internal/web"
@@ -31,76 +25,6 @@ import (
 )
 
 var update = flag.Bool("update", false, "update test files with results")
-
-type fixup struct {
-	pattern     string
-	compiled    *regexp.Regexp
-	replace     string
-	replaceFunc func(b []byte) []byte
-}
-
-var fixups = []fixup{
-	{
-		// modifies paths to Go files by replacing their directory with "...".
-		// For example,/a/b/c.go becomes .../c.go .
-		// This makes it possible to compare govulncheck output across systems, because
-		// Go filenames include setup-specific paths.
-		pattern: `[^\s"]*\.go[\s":]`,
-		replaceFunc: func(b []byte) []byte {
-			s := string(b)
-			return []byte(fmt.Sprintf(`.../%s%c`, filepath.Base(s[:len(s)-1]), s[len(s)-1]))
-		},
-	}, {
-		// There was a one-line change in container/heap/heap.go between 1.18
-		// and 1.19 that makes the stack traces different. Ignore it.
-		pattern: `heap\.go:(\d+)`,
-		replace: `N`,
-	}, {
-		pattern: `Scanning your code and (\d+) packages across (\d+)`,
-		replace: `Scanning your code and P packages across M`,
-	}, {
-		pattern: `Scanner: govulncheck@v.*`,
-		replace: `Scanner: govulncheck@v1.0.0`,
-	}, {
-		pattern: `"([^"]*") is a file`,
-		replace: `govulncheck: myfile is a file`,
-	}, {
-		pattern: `"scanner_version": "[^"]*"`,
-		replace: `"scanner_version": "v0.0.0-00000000000-20000101010101"`,
-	}, {
-		pattern: `file:///(.*)/testdata/vulndb`,
-		replace: `testdata/vulndb`,
-	}, {
-		pattern: `package (.*) is not in (GOROOT|std) (.*)`,
-		replace: `package foo is not in GOROOT (/tmp/foo)`,
-	}, {
-		pattern: `modified (.*)\)`,
-		replace: `modified 01 Jan 21 00:00 UTC)`,
-	}, {
-		pattern: `Go: (go1.[\.\d]*|devel).*`,
-		replace: `Go: go1.18`,
-	}, {
-		pattern: `"go_version": "go[^\s"]*"`,
-		replace: `"go_version": "go1.18"`,
-	},
-}
-
-func (f *fixup) init() {
-	f.compiled = regexp.MustCompile(f.pattern)
-}
-
-func (f *fixup) apply(data []byte) []byte {
-	if f.replaceFunc != nil {
-		return f.compiled.ReplaceAllFunc(data, f.replaceFunc)
-	}
-	return f.compiled.ReplaceAll(data, []byte(f.replace))
-}
-
-func init() {
-	for i := range fixups {
-		fixups[i].init()
-	}
-}
 
 func TestCommand(t *testing.T) {
 	if testing.Short() {
@@ -111,40 +35,65 @@ func TestCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	vulndbDir, err := filepath.Abs(filepath.Join(testDir, "testdata", "vulndb-v1"))
+
+	// test all cases in testdata subdirectory
+	fs, err := os.ReadDir(filepath.Join(testDir, "testdata"))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("failed to read test cases: %v", err)
 	}
+	for _, tc := range fs {
+		if !tc.IsDir() {
+			continue
+		}
+		t.Run(tc.Name(), func(t *testing.T) {
+			runTestCase(t, tc.Name(), testDir)
+		})
+	}
+}
+
+func runTestCase(t *testing.T, tcName, testDir string) {
+	testCaseDir := filepath.Join(testDir, "testdata", tcName)
+	cfg, err := loadConfig(filepath.Join(testCaseDir, "config.json"))
+	if err != nil {
+		t.Fatalf("failed to load config: %v", err)
+	}
+
+	if cfg.skip() {
+		return
+	}
+	if cfg.Copy {
+		testCaseDir = copyTestCase(testCaseDir, t)
+	}
+
+	vulndbDir := filepath.Join(testCaseDir, "vulndb-v1")
+	modulesDir := filepath.Join(testCaseDir, "modules")
+	testfilesDir := filepath.Join(testCaseDir, "testfiles")
 	govulndbURI, err := web.URLFromFilePath(vulndbDir)
 	if err != nil {
-		t.Fatalf("failed to create make vulndb url: %v", err)
+		t.Fatalf("failed to create vulndb url: %v", err)
 	}
 
-	moduleDirs, err := filepath.Glob("testdata/modules/*")
+	moduleDirs, err := filepath.Glob(filepath.Join(modulesDir, "*"))
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	os.Setenv("moddir", filepath.Join(testDir, "testdata", "modules"))
 	for _, md := range moduleDirs {
-		// Skip nogomod module. It has intended build issues.
-		if filepath.Base(md) == "nogomod" {
+		if cfg.SkipBuild {
 			continue
 		}
 
 		// Build test module binary.
-		binary, cleanup := test.GoBuild(t, md, "", filepath.Base(md) == "strip")
+		binary, cleanup := test.GoBuild(t, md, "", cfg.Strip)
 		t.Cleanup(cleanup)
 		// Set an environment variable to the path to the binary, so tests
-		// can refer to it.
-		varName := filepath.Base(md) + "_binary"
+		// can refer to it. The binary name is unique across all test cases.
+		varName := tcName + "_" + filepath.Base(md) + "_binary"
 		os.Setenv(varName, binary)
 	}
-	runTestSuite(t, filepath.Join(testDir, "testdata"), govulndbURI.String(), *update)
-	if runtime.GOOS != "darwin" {
-		// Binaries are not stripped on darwin with go1.21 and earlier. See #61051.
-		runTestSuite(t, filepath.Join(testDir, "testdata/strip"), govulndbURI.String(), *update)
-	}
+
+	os.Setenv("moddir", modulesDir)
+	os.Setenv("testdir", testfilesDir)
+	runTestSuite(t, testfilesDir, govulndbURI.String(), cfg.Fixups, *update)
 }
 
 // Limit the number of concurrent scans. Scanning is implemented using
@@ -165,10 +114,10 @@ var (
 	parallelLimiterInit sync.Once
 )
 
-// testSuite creates a cmdtest suite from dir. It also defines
-// a govulncheck command on the suite that runs govulncheck
-// against vulnerability database available at vulndbDir.
-func runTestSuite(t *testing.T, dir string, govulndb string, update bool) {
+// testSuite creates a cmdtest suite from testfilesDir. It also defines
+// a govulncheck command on the suite that runs govulncheck against
+// vulnerability database available at vulndbDir.
+func runTestSuite(t *testing.T, testfilesDir string, vulndbDir string, fixups []fixup, update bool) {
 	parallelLimiterInit.Do(func() {
 		limit := (runtime.GOMAXPROCS(0) + 3) / 4
 		if limit > 2 && unsafe.Sizeof(uintptr(0)) < 8 {
@@ -176,25 +125,24 @@ func runTestSuite(t *testing.T, dir string, govulndb string, update bool) {
 		}
 		parallelLimiter = make(chan struct{}, limit)
 	})
-
-	ts, err := cmdtest.Read(dir)
+	ts, err := cmdtest.Read(filepath.Join(testfilesDir, "*"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	ts.DisableLogging = true
 
-	ts.Commands["govulncheck"] = func(args []string, inputFile string) ([]byte, error) {
+	govulncheckCmd := func(args []string, inputFile string) ([]byte, error) {
 		parallelLimiter <- struct{}{}
 		defer func() { <-parallelLimiter }()
 
-		newargs := append([]string{"-db", govulndb}, args...)
+		newargs := append([]string{"-db", vulndbDir}, args...)
 
 		buf := &bytes.Buffer{}
 		cmd := scan.Command(context.Background(), newargs...)
 		cmd.Stdout = buf
 		cmd.Stderr = buf
 		if inputFile != "" {
-			input, err := os.Open(filepath.Join(dir, inputFile))
+			input, err := os.Open(filepath.Join(testfilesDir, inputFile))
 			if err != nil {
 				return nil, err
 			}
@@ -237,6 +185,37 @@ func runTestSuite(t *testing.T, dir string, govulndb string, update bool) {
 		}
 		return out, err
 	}
+	ts.Commands["govulncheck"] = govulncheckCmd
+
+	// govulncheck-cmp is like govulncheck except that the last argument is a file
+	// whose contents are compared to the output of govulncheck. This command does
+	// not output anything.
+	ts.Commands["govulncheck-cmp"] = func(args []string, inputFile string) ([]byte, error) {
+		l := len(args)
+		if l == 0 {
+			return nil, nil
+		}
+		cmpArg := args[l-1]
+		gArgs := args[:l-1]
+
+		out, err := govulncheckCmd(gArgs, inputFile)
+		if err != nil {
+			return nil, &cmdtest.ExitCodeErr{Msg: err.Error(), Code: 1}
+		}
+		got := string(out)
+
+		file, err := os.ReadFile(cmpArg)
+		if err != nil {
+			return nil, &cmdtest.ExitCodeErr{Msg: err.Error(), Code: 1}
+		}
+		want := string(file)
+
+		if diff := cmp.Diff(want, got); diff != "" {
+			return nil, &cmdtest.ExitCodeErr{Msg: "govulncheck output not matching the file contents:\n" + diff, Code: 1}
+		}
+		return nil, nil
+	}
+
 	if update {
 		ts.Run(t, true)
 		return
@@ -246,7 +225,7 @@ func runTestSuite(t *testing.T, dir string, govulndb string, update bool) {
 
 func isJSONMode(args []string) bool {
 	for _, arg := range args {
-		if arg == "-json" {
+		if arg == "json" {
 			return true
 		}
 	}

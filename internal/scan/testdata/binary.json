@@ -1,7 +1,8 @@
 {
   "config": {
     "protocol_version": "v0.1.0",
-    "scanner_name": "govulncheck"
+    "scanner_name": "govulncheck",
+    "scan_level": "symbol"
   }
 }
 {
@@ -64,6 +65,29 @@
     "database_specific": {
       "url": "https://pkg.go.dev/vuln/GO-0000-0002"
     }
+  }
+}
+{
+  "finding": {
+    "osv": "GO-0000-0002",
+    "trace": [
+      {
+        "module": "stdlib",
+        "version": "v0.0.1"
+      }
+    ]
+  }
+}
+{
+  "finding": {
+    "osv": "GO-0000-0002",
+    "trace": [
+      {
+        "module": "stdlib",
+        "version": "v0.0.1",
+        "package": "net/http"
+      }
+    ]
   }
 }
 {

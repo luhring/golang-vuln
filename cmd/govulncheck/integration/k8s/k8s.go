@@ -25,6 +25,9 @@ func main() {
 	want := map[string]bool{
 		"github.com/containernetworking/cni/pkg/invoke":           true,
 		"github.com/evanphx/json-patch":                           true,
+		"github.com/heketi/heketi/client/api/go-client":           true,
+		"github.com/heketi/heketi/pkg/glusterfs/api":              true,
+		"github.com/heketi/heketi/pkg/utils":                      true,
 		"github.com/opencontainers/selinux/go-selinux":            true,
 		"github.com/prometheus/client_golang/prometheus/promhttp": true,
 		"golang.org/x/crypto/cryptobyte":                          true,
@@ -34,8 +37,9 @@ func main() {
 		"golang.org/x/net/http2":                                  true,
 		"golang.org/x/net/http2/hpack":                            true,
 		"golang.org/x/text/encoding/unicode":                      true,
+		"google.golang.org/grpc":                                  true,
 	}
-	if err := integration.CompareNonStdVulns(out, want); err != nil {
+	if err := integration.CompareVulns(out, want); err != nil {
 		log.Fatal(err)
 	}
 }

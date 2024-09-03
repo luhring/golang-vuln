@@ -1,3 +1,5 @@
+=== Symbol Results ===
+
 Vulnerability #1: GO-0000-0001
     Third-party vulnerability
   More info: https://pkg.go.dev/vuln/GO-0000-0001
@@ -8,21 +10,8 @@ Vulnerability #1: GO-0000-0001
     Example traces found:
       #1: main.main calls vmod.Vuln
 
-=== Informational ===
-
-Found 0 vulnerabilities in packages that you import, but there are no
-call stacks leading to the use of these vulnerabilities. You may not
-need to take any action. There is also 1 vulnerability in modules
-that you require that is neither imported nor called.
-See https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck for details.
-
-Vulnerability #1: GO-0000-0002
-    Stdlib vulnerability
-  More info: https://pkg.go.dev/vuln/GO-0000-0002
-  Standard library
-    Found in: net/http@go0.0.1
-    Fixed in: N/A
-
-Your code is affected by 1 vulnerability from 1 module.
-
-Share feedback at https://go.dev/s/govulncheck-feedback.
+Your code is affected by 1 vulnerability from the Go standard library.
+This scan also found 1 vulnerability in packages you import and 0
+vulnerabilities in modules you require, but your code doesn't appear to call
+these vulnerabilities.
+Use '-show verbose' for more details.

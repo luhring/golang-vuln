@@ -9,7 +9,7 @@ package main
 
 import (
 	"bufio"
-	"context"
+	"errors"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -19,8 +19,6 @@ import (
 
 	"golang.org/x/mod/modfile"
 	"golang.org/x/vuln/internal/testenv"
-	"golang.org/x/vuln/scan"
-	"mvdan.cc/unparam/check"
 )
 
 // excluded contains the set of modules that x/vuln should not depend on.
@@ -32,26 +30,6 @@ var goHeader = regexp.MustCompile(`^// Copyright 20\d\d The Go Authors\. All rig
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file\.`)
 
-func TestBashChecks(t *testing.T) {
-	skipIfShort(t)
-	bash, err := exec.LookPath("bash")
-	if err != nil {
-		t.Skipf("skipping: %v", err)
-	}
-
-	var cmd *exec.Cmd
-	if os.Getenv("GO_BUILDER_NAME") != "" {
-		cmd = exec.Command(bash, "./checks.bash", "trybots")
-	} else {
-		cmd = exec.Command(bash, "./checks.bash")
-	}
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestDependencies(t *testing.T) {
 	dat, err := os.ReadFile("go.mod")
 	if err != nil {
@@ -62,10 +40,6 @@ func TestDependencies(t *testing.T) {
 		t.Fatalf("modfile.Parse: %v", err)
 	}
 	for _, r := range f.Require {
-		// This is used by staticcheck.
-		if strings.HasPrefix(r.Mod.Path, "golang.org/x/exp/typeparams") {
-			continue
-		}
 		for ex := range excluded {
 			if strings.HasPrefix(r.Mod.Path, ex) {
 				t.Errorf("go.mod contains %q as a dependency, which should not happen", r.Mod.Path)
@@ -74,51 +48,12 @@ func TestDependencies(t *testing.T) {
 	}
 }
 
-func TestGovulncheck(t *testing.T) {
-	skipIfShort(t)
-	testenv.NeedsGoBuild(t)
-
-	ctx := context.Background()
-
-	cmd := scan.Command(ctx, "./...")
-	err := cmd.Start()
-	if err == nil {
-		err = cmd.Wait()
-	}
-	switch err := err.(type) {
-	case nil:
-	case interface{ ExitCode() int }:
-		if err.ExitCode() != 0 {
-			t.Error("govulncheck found problems")
-		}
-	default:
-		t.Error(err)
-	}
-}
-
-func TestStaticCheck(t *testing.T) {
-	skipIfShort(t)
-	rungo(t, "run", "honnef.co/go/tools/cmd/staticcheck@v0.4.3", "./...")
-}
-
-func TestUnparam(t *testing.T) {
-	testenv.NeedsGoBuild(t)
-	warns, err := check.UnusedParams(false, false, false, "./...")
-	if err != nil {
-		t.Fatalf("check.UnusedParams: %v", err)
-	}
-	for _, warn := range warns {
-		t.Errorf(warn)
-	}
-}
-
 func TestVet(t *testing.T) {
 	rungo(t, "vet", "-all", "./...")
 }
 
-func TestMisspell(t *testing.T) {
-	skipIfShort(t)
-	rungo(t, "run", "github.com/client9/misspell/cmd/misspell@v0.3.4", "-error", ".")
+func TestGoModTidy(t *testing.T) {
+	rungo(t, "mod", "tidy")
 }
 
 func TestHeaders(t *testing.T) {
@@ -151,13 +86,9 @@ func rungo(t *testing.T, args ...string) {
 
 	cmd := exec.Command("go", args...)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		t.Log("\n" + string(output))
-		t.Error("command had non zero exit code")
-	}
-}
-
-func skipIfShort(t *testing.T) {
-	if testing.Short() {
-		t.Skipf("skipping: short mode")
+		if ee := (*exec.ExitError)(nil); errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			t.Fatalf("%v: %v\n%s", cmd, err, ee.Stderr)
+		}
+		t.Fatalf("%v: %v\n%s", cmd, err, output)
 	}
 }

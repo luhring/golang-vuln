@@ -1,18 +1,9 @@
-=== Informational ===
-
-Found 1 vulnerability in packages that you import, but there are no
-call stacks leading to the use of this vulnerability. You may not
-need to take any action. There are also 0 vulnerabilities in modules
-that you require that are neither imported nor called.
-See https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck for details.
-
-Vulnerability #1: All
-
-  More info: https://pkg.go.dev/vuln/All
-  Module: golang.org/vmod
-    Found in: golang.org/vmod@v0.0.1
-    Fixed in: golang.org/vmod@v0.1.3
+=== Symbol Results ===
 
 No vulnerabilities found.
 
-Share feedback at https://go.dev/s/govulncheck-feedback.
+Your code is affected by 0 vulnerabilities.
+This scan also found 1 vulnerability in packages you import and 0
+vulnerabilities in modules you require, but your code doesn't appear to call
+these vulnerabilities.
+Use '-show verbose' for more details.

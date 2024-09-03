@@ -6,6 +6,9 @@ package scan
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"strings"
 
 	"golang.org/x/vuln/internal"
 	"golang.org/x/vuln/internal/govulncheck"
@@ -23,13 +26,13 @@ func validateFindings(findings ...*govulncheck.Finding) error {
 		}
 		for _, frame := range f.Trace {
 			if frame.Version != "" && frame.Module == "" {
-				return fmt.Errorf("invalid finding: if Frame.Version is set, Frame.Module must also be")
+				return fmt.Errorf("invalid finding: if Frame.Version (%s) is set, Frame.Module must also be", frame.Version)
 			}
 			if frame.Package != "" && frame.Module == "" {
-				return fmt.Errorf("invalid finding: if Frame.Package is set, Frame.Module must also be")
+				return fmt.Errorf("invalid finding: if Frame.Package (%s) is set, Frame.Module must also be", frame.Package)
 			}
 			if frame.Function != "" && frame.Package == "" {
-				return fmt.Errorf("invalid finding: if Frame.Function is set, Frame.Package must also be")
+				return fmt.Errorf("invalid finding: if Frame.Function (%s) is set, Frame.Package must also be", frame.Function)
 			}
 		}
 	}
@@ -44,4 +47,14 @@ func moduleVersionString(modulePath, version string) string {
 		version = semverToGoTag(version)
 	}
 	return version
+}
+
+func gomodExists(dir string) bool {
+	cmd := exec.Command("go", "env", "GOMOD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	output := strings.TrimSpace(string(out))
+	// If module-aware mode is enabled, but there is no go.mod, GOMOD will be os.DevNull
+	// If module-aware mode is disabled, GOMOD will be the empty string.
+	return err == nil && !(output == os.DevNull || output == "")
 }

@@ -18,6 +18,7 @@ import (
 	"golang.org/x/tools/go/packages"
 	"golang.org/x/tools/go/ssa/ssautil"
 	"golang.org/x/tools/go/types/typeutil"
+	"golang.org/x/vuln/internal"
 	"golang.org/x/vuln/internal/osv"
 	"golang.org/x/vuln/internal/semver"
 
@@ -28,7 +29,6 @@ import (
 // the ssa program encapsulating the packages and top level
 // ssa packages corresponding to pkgs.
 func buildSSA(pkgs []*packages.Package, fset *token.FileSet) (*ssa.Program, []*ssa.Package) {
-	// TODO(https://go.dev/issue/57221): what about entry functions that are generics?
 	prog := ssa.NewProgram(fset, ssa.InstantiateGenerics)
 
 	imports := make(map[*packages.Package]*ssa.Package)
@@ -112,15 +112,17 @@ func dbTypeFormat(t types.Type) string {
 
 // dbFuncName computes a function name consistent with the namings used in vulnerability
 // databases. Effectively, a qualified name of a function local to its enclosing package.
-// If a receiver is a pointer, this information is not encoded in the resulting name. The
-// name of anonymous functions is simply "". The function names are unique subject to the
-// enclosing package, but not globally.
+// If a receiver is a pointer, this information is not encoded in the resulting name. If
+// a function has type argument/parameter, this information is omitted. The name of
+// anonymous functions is simply "". The function names are unique subject to the enclosing
+// package, but not globally.
 //
 // Examples:
 //
 //	func (a A) foo (...) {...}  -> A.foo
 //	func foo(...) {...}         -> foo
 //	func (b *B) bar (...) {...} -> B.bar
+//	func (c C[T]) do(...) {...} -> C.do
 func dbFuncName(f *ssa.Function) string {
 	selectBound := func(f *ssa.Function) types.Type {
 		// If f is a "bound" function introduced by ssa for a given type, return the type.
@@ -153,18 +155,17 @@ func dbFuncName(f *ssa.Function) string {
 	}
 
 	if qprefix == "" {
-		return f.Name()
+		return funcName(f)
 	}
-	return qprefix + "." + f.Name()
+	return qprefix + "." + funcName(f)
 }
 
-// dbTypesFuncName is dbFuncName defined over *types.Func.
-func dbTypesFuncName(f *types.Func) string {
-	sig := f.Type().(*types.Signature)
-	if sig.Recv() == nil {
-		return f.Name()
-	}
-	return dbTypeFormat(sig.Recv().Type()) + "." + f.Name()
+// funcName returns the name of the ssa function f.
+// It is f.Name() without additional type argument
+// information in case of generics.
+func funcName(f *ssa.Function) string {
+	n, _, _ := strings.Cut(f.Name(), "[")
+	return n
 }
 
 // memberFuncs returns functions associated with the `member`:
@@ -227,39 +228,6 @@ func funcRecvType(f *ssa.Function) string {
 	buf := new(bytes.Buffer)
 	types.WriteType(buf, v.Type(), nil)
 	return buf.String()
-}
-
-// allSymbols returns all top-level functions and methods defined in pkg.
-func allSymbols(pkg *types.Package) []string {
-	var names []string
-	scope := pkg.Scope()
-	for _, name := range scope.Names() {
-		o := scope.Lookup(name)
-		switch o := o.(type) {
-		case *types.Func:
-			names = append(names, dbTypesFuncName(o))
-		case *types.TypeName:
-			ms := types.NewMethodSet(types.NewPointer(o.Type()))
-			for i := 0; i < ms.Len(); i++ {
-				if f, ok := ms.At(i).Obj().(*types.Func); ok {
-					names = append(names, dbTypesFuncName(f))
-				}
-			}
-		}
-	}
-	return names
-}
-
-// vulnMatchesPackage reports whether an entry applies to pkg (an import path).
-func vulnMatchesPackage(v *osv.Entry, pkg string) bool {
-	for _, a := range v.Affected {
-		for _, p := range a.EcosystemSpecific.Packages {
-			if p.Path == pkg {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func FixedVersion(modulePath, version string, affected []osv.Affected) string {
@@ -335,16 +303,51 @@ func fixNegated(fix string, affected []osv.Affected) bool {
 	return false
 }
 
-func ModPath(mod *packages.Module) string {
+func modPath(mod *packages.Module) string {
 	if mod.Replace != nil {
 		return mod.Replace.Path
 	}
 	return mod.Path
 }
 
-func ModVersion(mod *packages.Module) string {
+func modVersion(mod *packages.Module) string {
 	if mod.Replace != nil {
 		return mod.Replace.Version
 	}
 	return mod.Version
+}
+
+// pkgPath returns the path of the f's enclosing package, if any.
+// Otherwise, returns internal.UnknownPackagePath.
+func pkgPath(f *ssa.Function) string {
+	g := f
+	if f.Origin() != nil {
+		// Instantiations of generics do not have
+		// an associated package. We hence look up
+		// the original function for the package.
+		g = f.Origin()
+	}
+	if g.Package() != nil && g.Package().Pkg != nil {
+		return g.Package().Pkg.Path()
+	}
+	return internal.UnknownPackagePath
+}
+
+func pkgModPath(pkg *packages.Package) string {
+	if pkg != nil && pkg.Module != nil {
+		return pkg.Module.Path
+	}
+	return internal.UnknownModulePath
+}
+
+func IsStdPackage(pkg string) bool {
+	if pkg == "" || pkg == internal.UnknownPackagePath {
+		return false
+	}
+	// std packages do not have a "." in their path. For instance, see
+	// Contains in pkgsite/+/refs/heads/master/internal/stdlbib/stdlib.go.
+	if i := strings.IndexByte(pkg, '/'); i != -1 {
+		pkg = pkg[:i]
+	}
+	return !strings.Contains(pkg, ".")
 }
